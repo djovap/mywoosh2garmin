@@ -7,14 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"mywhoosh2garmin/garmin"
+	"mywhoosh2garmin/mywhoosh"
 )
 
 // ---------------------------------------------------------------------------
@@ -22,8 +25,8 @@ import (
 // ---------------------------------------------------------------------------
 
 type appConfig struct {
-	MyWhooshDir string `json:"mywhoosh_dir"`
-	Email       string `json:"email"`
+	MyWhooshEmail string `json:"mywhoosh_email"`
+	GarminEmail   string `json:"garmin_email"`
 }
 
 func appConfigDir() string {
@@ -48,37 +51,66 @@ func saveAppConfig(cfg appConfig) {
 }
 
 // ---------------------------------------------------------------------------
+// Synced-activity tracker (persisted to ~/.mywhoosh2garmin/synced.json)
+// ---------------------------------------------------------------------------
+
+type syncedTracker struct {
+	mu       sync.Mutex
+	path     string
+	uploaded map[string]string // activityID → upload timestamp
+}
+
+func newSyncedTracker(dir string) *syncedTracker {
+	st := &syncedTracker{
+		path:     filepath.Join(dir, "synced.json"),
+		uploaded: make(map[string]string),
+	}
+	data, err := os.ReadFile(st.path)
+	if err == nil {
+		json.Unmarshal(data, &st.uploaded)
+	}
+	return st
+}
+
+func (st *syncedTracker) IsSynced(activityID string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	_, ok := st.uploaded[activityID]
+	return ok
+}
+
+func (st *syncedTracker) MarkSynced(activityID string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.uploaded[activityID] = time.Now().Format(time.RFC3339)
+	data, _ := json.MarshalIndent(st.uploaded, "", "  ")
+	os.WriteFile(st.path, data, 0o600)
+}
+
+// ---------------------------------------------------------------------------
 // GUI
 // ---------------------------------------------------------------------------
 
 func main() {
 	a := app.New()
 	w := a.NewWindow("MyWhoosh2Garmin")
-	w.Resize(fyne.NewSize(620, 520))
+	w.Resize(fyne.NewSize(720, 700))
 
 	cfg := loadAppConfig()
+	tracker := newSyncedTracker(appConfigDir())
 
-	// --- Widgets ---
+	// --- MyWhoosh state ---
+	mwClient := mywhoosh.NewClient(appConfigDir())
 
-	dirEntry := widget.NewEntry()
-	dirEntry.SetPlaceHolder("Path to MyWhoosh FIT file directory")
-	if cfg.MyWhooshDir != "" {
-		dirEntry.SetText(cfg.MyWhooshDir)
-	}
+	// --- Garmin state ---
+	var garminClient *garmin.Client
 
-	emailEntry := widget.NewEntry()
-	emailEntry.SetPlaceHolder("Garmin email")
-	if cfg.Email != "" {
-		emailEntry.SetText(cfg.Email)
-	}
-
-	passwordEntry := widget.NewPasswordEntry()
-	passwordEntry.SetPlaceHolder("Garmin password (only needed first time)")
-
-	logLabel := widget.NewLabel("")
-	logLabel.Wrapping = fyne.TextWrapWord
-	logScroll := container.NewVScroll(logLabel)
-	logScroll.SetMinSize(fyne.NewSize(0, 220))
+	// --- Log panel ---
+	logEntry := widget.NewMultiLineEntry()
+	logEntry.Wrapping = fyne.TextWrapWord
+	logEntry.Disable()
+	logScroll := container.NewVScroll(logEntry)
+	logScroll.SetMinSize(fyne.NewSize(0, 140))
 
 	var logMu sync.Mutex
 	var logText string
@@ -89,7 +121,10 @@ func main() {
 		text := logText
 		logMu.Unlock()
 		fyne.Do(func() {
-			logLabel.SetText(text)
+			logEntry.Enable()
+			logEntry.SetText(text)
+			logEntry.CursorRow = len(strings.Split(text, "\n"))
+			logEntry.Disable()
 			logScroll.ScrollToBottom()
 		})
 	}
@@ -99,148 +134,448 @@ func main() {
 		appendLog(fmt.Sprintf(format, args...))
 	}
 
-	// --- Find MyWhoosh Dir button ---
-	findBtn := widget.NewButton("🔍  Find MyWhoosh Dir", func() {
-		dir, err := findMyWhooshDir()
-		if err != nil {
-			appendLog("Auto-detect not available: " + err.Error())
-			appendLog("Pick the directory manually…")
-			dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
-				if err != nil || uri == nil {
-					return
-				}
-				dirEntry.SetText(uri.Path())
-				cfg.MyWhooshDir = uri.Path()
-				saveAppConfig(cfg)
-				appendLog("✓ Directory set: " + uri.Path())
-			}, w)
-			return
-		}
-		dirEntry.SetText(dir)
-		cfg.MyWhooshDir = dir
-		saveAppConfig(cfg)
-		appendLog("✓ Found MyWhoosh dir: " + dir)
+	// Wire MyWhoosh debug logs into the GUI
+	mywhoosh.SetDebugFn(func(format string, args ...interface{}) {
+		appendLog(fmt.Sprintf(format, args...))
 	})
 
-	// --- Sync button ---
-	var syncing bool
-	syncBtn := widget.NewButton("🔄  Sync to Garmin", nil)
-	syncBtn.Importance = widget.HighImportance
+	// --- MyWhoosh Credentials ---
+	mwEmailEntry := widget.NewEntry()
+	mwEmailEntry.SetPlaceHolder("MyWhoosh email")
+	if cfg.MyWhooshEmail != "" {
+		mwEmailEntry.SetText(cfg.MyWhooshEmail)
+	}
 
-	syncBtn.OnTapped = func() {
-		if syncing {
-			return
+	mwPasswordEntry := widget.NewPasswordEntry()
+	mwPasswordEntry.SetPlaceHolder("MyWhoosh password")
+
+	// --- Garmin Credentials ---
+	garminEmailEntry := widget.NewEntry()
+	garminEmailEntry.SetPlaceHolder("Garmin email")
+	if cfg.GarminEmail != "" {
+		garminEmailEntry.SetText(cfg.GarminEmail)
+	}
+
+	garminPasswordEntry := widget.NewPasswordEntry()
+	garminPasswordEntry.SetPlaceHolder("Garmin password (only needed first time)")
+
+	// --- Activity list container ---
+	activityListBox := container.NewVBox()
+	activityScroll := container.NewVScroll(activityListBox)
+	activityScroll.SetMinSize(fyne.NewSize(0, 280))
+
+	mwStatusLabel := widget.NewLabel("")
+	garminStatusLabel := widget.NewLabel("")
+
+	// --- Helper: authenticate to Garmin ---
+	ensureGarmin := func() (*garmin.Client, error) {
+		if garminClient != nil && garminClient.OAuth2 != nil && !garminClient.OAuth2.Expired() {
+			return garminClient, nil
 		}
-		syncing = true
-		syncBtn.Disable()
+
+		tokenDir := appConfigDir()
+		client := garmin.NewClient(tokenDir)
+
+		if err := client.Resume(); err == nil {
+			garminClient = client
+			return client, nil
+		}
+
+		email := garminEmailEntry.Text
+		password := garminPasswordEntry.Text
+		if email == "" || password == "" {
+			return nil, fmt.Errorf("enter Garmin email & password for first login")
+		}
+
+		if err := client.Login(email, password); err != nil {
+			return nil, fmt.Errorf("Garmin login failed: %w", err)
+		}
+
+		garminClient = client
+		return client, nil
+	}
+
+	// --- Helper: process and upload a single activity ---
+	uploadActivity := func(activity mywhoosh.Activity, btn *widget.Button) {
+		btn.Disable()
+		btn.SetText("⏳")
 
 		go func() {
 			defer func() {
-				syncing = false
-				syncBtn.Enable()
+				fyne.Do(func() {
+					if tracker.IsSynced(activity.ID) {
+						btn.SetText("✓")
+						btn.Importance = widget.LowImportance
+					} else {
+						btn.SetText("⬆ Upload")
+						btn.Enable()
+					}
+					btn.Refresh()
+				})
+			}()
+
+			// 1. Download FIT from MyWhoosh
+			appendLog(fmt.Sprintf("⬇ Downloading: %s (%s)…",
+				activity.DisplayName(), activity.FormattedDate()))
+
+			fileID := activity.ActivityFileID
+			if fileID == "" {
+				fileID = activity.ID
+			}
+			fitData, err := mwClient.DownloadFitFile(fileID)
+			if err != nil {
+				appendLog("  ❌ Download failed: " + err.Error())
+				return
+			}
+			appendLog(fmt.Sprintf("  ✓ Downloaded %d bytes", len(fitData)))
+
+			// 2. Save to temp file
+			tmpDir := os.TempDir()
+			ts := time.Now().Format("20060102_150405")
+			inputPath := filepath.Join(tmpDir, fmt.Sprintf("mw_%s_%s.fit", activity.ID, ts))
+			outputPath := filepath.Join(tmpDir, fmt.Sprintf("mw_%s_%s_fixed.fit", activity.ID, ts))
+
+			if err := os.WriteFile(inputPath, fitData, 0o600); err != nil {
+				appendLog("  ❌ Save temp file failed: " + err.Error())
+				return
+			}
+			defer os.Remove(inputPath)
+			defer os.Remove(outputPath)
+
+			// 3. Fix the FIT file
+			appendLog("  🔧 Fixing FIT file…")
+			if err := fixFitFile(inputPath, outputPath); err != nil {
+				appendLog("  ❌ Fix failed: " + err.Error())
+				return
+			}
+
+			// 4. Authenticate to Garmin
+			client, err := ensureGarmin()
+			if err != nil {
+				appendLog("  ❌ " + err.Error())
+				return
+			}
+			fyne.Do(func() {
+				garminStatusLabel.SetText("✓ Garmin connected")
+			})
+
+			// 5. Upload to Garmin
+			appendLog("  ⬆ Uploading to Garmin Connect…")
+			if err := client.UploadFIT(outputPath); err != nil {
+				if strings.Contains(err.Error(), "duplicate") {
+					appendLog("  ⚠ Already on Garmin (duplicate)")
+					tracker.MarkSynced(activity.ID)
+				} else {
+					appendLog("  ❌ Upload failed: " + err.Error())
+				}
+				return
+			}
+
+			tracker.MarkSynced(activity.ID)
+			appendLog("  ✓ Uploaded to Garmin Connect!")
+		}()
+	}
+
+	// --- Helper: build activity row widget ---
+	buildActivityRow := func(activity mywhoosh.Activity) fyne.CanvasObject {
+		dateStr := activity.FormattedDate()
+		name := activity.DisplayName()
+
+		details := dateStr + "  —  " + name
+		if dist := activity.FormattedDistance(); dist != "" {
+			details += "  •  " + dist
+		}
+		if dur := activity.FormattedDuration(); dur != "" {
+			details += "  •  " + dur
+		}
+		if activity.AvgPower > 0 {
+			details += fmt.Sprintf("  •  %.0fW", activity.AvgPower)
+		}
+		if activity.AvgHR > 0 {
+			details += fmt.Sprintf("  •  %.0fbpm", activity.AvgHR)
+		}
+
+		infoLabel := widget.NewLabel(details)
+		infoLabel.Wrapping = fyne.TextWrapWord
+
+		uploadBtn := widget.NewButtonWithIcon("⬆ Upload", theme.UploadIcon(), nil)
+		uploadBtn.Importance = widget.HighImportance
+
+		if tracker.IsSynced(activity.ID) {
+			uploadBtn.SetText("✓ Synced")
+			uploadBtn.Importance = widget.LowImportance
+			uploadBtn.Disable()
+		}
+
+		act := activity // capture for closure
+		uploadBtn.OnTapped = func() {
+			uploadActivity(act, uploadBtn)
+		}
+
+		return container.NewBorder(nil, nil, nil, uploadBtn, infoLabel)
+	}
+
+	// --- Upload All button ---
+	uploadAllBtn := widget.NewButton("⬆  Upload All to Garmin", nil)
+	uploadAllBtn.Importance = widget.HighImportance
+	uploadAllBtn.Disable()
+
+	var currentActivities []mywhoosh.Activity
+
+	// --- Fetch Activities button ---
+	var fetching bool
+	fetchBtn := widget.NewButton("📋  Fetch Activities (last 10 days)", nil)
+	fetchBtn.Importance = widget.HighImportance
+
+	fetchBtn.OnTapped = func() {
+		if fetching {
+			return
+		}
+		fetching = true
+		fetchBtn.Disable()
+
+		go func() {
+			defer func() {
+				fetching = false
+				fyne.Do(func() { fetchBtn.Enable() })
 			}()
 
 			// Persist config
-			cfg.MyWhooshDir = dirEntry.Text
-			cfg.Email = emailEntry.Text
+			cfg.MyWhooshEmail = mwEmailEntry.Text
+			cfg.GarminEmail = garminEmailEntry.Text
 			saveAppConfig(cfg)
 
-			if cfg.MyWhooshDir == "" {
-				appendLog("❌ Set MyWhoosh directory first")
-				return
-			}
-
-			// 1. Find unsynced FIT files
-			appendLog("Scanning for unsynced activities (last 30 days)…")
-			files, err := findUnsyncedFitFiles(cfg.MyWhooshDir)
-			if err != nil {
-				appendLog("❌ Scan failed: " + err.Error())
-				return
-			}
-			if len(files) == 0 {
-				appendLog("✓ Everything is already synced!")
-				return
-			}
-			appendLog(fmt.Sprintf("Found %d unsynced activity file(s)", len(files)))
-
-			// 2. Authenticate to Garmin
-			tokenDir := appConfigDir()
-			client := garmin.NewClient(tokenDir)
-
-			if err := client.Resume(); err == nil {
-				appendLog("Garmin session resumed")
+			// 1. Login to MyWhoosh (try cached session first)
+			if err := mwClient.Resume(); err == nil {
+				appendLog("MyWhoosh session resumed")
 			} else {
-				email := emailEntry.Text
-				password := passwordEntry.Text
+				email := mwEmailEntry.Text
+				password := mwPasswordEntry.Text
 				if email == "" || password == "" {
-					appendLog("❌ Enter Garmin email & password for first login")
+					appendLog("❌ Enter MyWhoosh email & password")
 					return
 				}
-				appendLog("Logging in to Garmin Connect…")
-				if err := client.Login(email, password); err != nil {
-					appendLog("❌ Login failed: " + err.Error())
+
+				appendLog("Logging in to MyWhoosh…")
+				if err := mwClient.Login(email, password); err != nil {
+					appendLog("❌ MyWhoosh login failed: " + err.Error())
 					return
 				}
-				appendLog("✓ Logged in to Garmin Connect")
+				appendLog("✓ Logged in to MyWhoosh")
+			}
+			fyne.Do(func() {
+				mwStatusLabel.SetText("✓ MyWhoosh connected")
+			})
+
+			// 2. Fetch activities from last 10 days
+			appendLog("Fetching activities (last 10 days)…")
+			activities, err := mwClient.GetRecentActivities(10)
+			if err != nil {
+				// Token may be expired — try fresh login
+				email := mwEmailEntry.Text
+				password := mwPasswordEntry.Text
+				if email != "" && password != "" {
+					appendLog("Session may be expired, retrying login…")
+					if loginErr := mwClient.Login(email, password); loginErr == nil {
+						activities, err = mwClient.GetRecentActivities(10)
+					}
+				}
+				if err != nil {
+					appendLog("❌ Failed to fetch activities: " + err.Error())
+					return
+				}
 			}
 
-			// 3. Process + upload each file
-			tmpDir := os.TempDir()
-			success, skipped := 0, 0
+			if len(activities) == 0 {
+				appendLog("No activities found in the last 10 days.")
+				fyne.Do(func() {
+					activityListBox.RemoveAll()
+					activityListBox.Add(widget.NewLabel("No activities found in the last 10 days."))
+				})
+				return
+			}
 
-			for i, fitFile := range files {
-				name := filepath.Base(fitFile)
-				appendLog(fmt.Sprintf("\n[%d/%d] %s", i+1, len(files), name))
+			appendLog(fmt.Sprintf("✓ Found %d activities", len(activities)))
 
-				outPath := filepath.Join(tmpDir, generateOutputFilename(fitFile))
+			// 3. Build activity list UI
+			currentActivities = activities
 
-				if err := fixFitFile(fitFile, outPath); err != nil {
-					appendLog("  ❌ Processing failed: " + err.Error())
-					skipped++
+			fyne.Do(func() {
+				activityListBox.RemoveAll()
+
+				for _, act := range activities {
+					row := buildActivityRow(act)
+					activityListBox.Add(row)
+				}
+
+				// Count unsynced
+				unsynced := 0
+				for _, act := range activities {
+					if !tracker.IsSynced(act.ID) {
+						unsynced++
+					}
+				}
+
+				if unsynced > 0 {
+					uploadAllBtn.Enable()
+					uploadAllBtn.SetText(fmt.Sprintf("⬆  Upload All to Garmin (%d new)", unsynced))
+				} else {
+					uploadAllBtn.SetText("✓  All synced")
+					uploadAllBtn.Disable()
+				}
+			})
+		}()
+	}
+
+	// --- Upload All logic ---
+	var uploadingAll bool
+	uploadAllBtn.OnTapped = func() {
+		if uploadingAll {
+			return
+		}
+		uploadingAll = true
+		uploadAllBtn.Disable()
+
+		go func() {
+			defer func() {
+				uploadingAll = false
+				fyne.Do(func() {
+					unsynced := 0
+					for _, act := range currentActivities {
+						if !tracker.IsSynced(act.ID) {
+							unsynced++
+						}
+					}
+					if unsynced > 0 {
+						uploadAllBtn.SetText(fmt.Sprintf("⬆  Upload All to Garmin (%d remaining)", unsynced))
+						uploadAllBtn.Enable()
+					} else {
+						uploadAllBtn.SetText("✓  All synced")
+					}
+				})
+			}()
+
+			success, failed := 0, 0
+			for i, act := range currentActivities {
+				if tracker.IsSynced(act.ID) {
 					continue
 				}
 
-				appendLog("  Uploading…")
-				if err := client.UploadFIT(outPath); err != nil {
+				appendLog(fmt.Sprintf("\n[%d/%d] %s", i+1, len(currentActivities), act.DisplayName()))
+
+				fileID := act.ActivityFileID
+				if fileID == "" {
+					fileID = act.ID
+				}
+
+				// Download
+				fitData, err := mwClient.DownloadFitFile(fileID)
+				if err != nil {
+					appendLog("  ❌ Download failed: " + err.Error())
+					failed++
+					continue
+				}
+
+				// Save temp
+				tmpDir := os.TempDir()
+				ts := time.Now().Format("20060102_150405")
+				inputPath := filepath.Join(tmpDir, fmt.Sprintf("mw_%s_%s.fit", act.ID, ts))
+				outputPath := filepath.Join(tmpDir, fmt.Sprintf("mw_%s_%s_fixed.fit", act.ID, ts))
+
+				if err := os.WriteFile(inputPath, fitData, 0o600); err != nil {
+					appendLog("  ❌ Save failed: " + err.Error())
+					failed++
+					continue
+				}
+
+				// Fix
+				if err := fixFitFile(inputPath, outputPath); err != nil {
+					appendLog("  ❌ Fix failed: " + err.Error())
+					os.Remove(inputPath)
+					failed++
+					continue
+				}
+
+				// Garmin auth
+				client, err := ensureGarmin()
+				if err != nil {
+					appendLog("  ❌ " + err.Error())
+					os.Remove(inputPath)
+					os.Remove(outputPath)
+					failed++
+					continue
+				}
+
+				// Upload
+				if err := client.UploadFIT(outputPath); err != nil {
 					if strings.Contains(err.Error(), "duplicate") {
-						markSynced(fitFile)
-						appendLog("  ⚠ Already on Garmin (marked synced)")
+						appendLog("  ⚠ Already on Garmin (duplicate)")
+						tracker.MarkSynced(act.ID)
+						success++
 					} else {
 						appendLog("  ❌ Upload failed: " + err.Error())
-						skipped++
+						failed++
 					}
-					os.Remove(outPath)
-					continue
+				} else {
+					tracker.MarkSynced(act.ID)
+					success++
+					appendLog("  ✓ Uploaded")
 				}
 
-				markSynced(fitFile)
-				os.Remove(outPath)
-				success++
-				appendLog("  ✓ Uploaded")
+				os.Remove(inputPath)
+				os.Remove(outputPath)
 			}
 
-			appendLog(fmt.Sprintf("\n✓ Sync complete — %d uploaded, %d skipped", success, skipped))
+			appendLog(fmt.Sprintf("\n✓ Batch complete — %d uploaded, %d failed", success, failed))
+
+			// Refresh the activity list UI
+			fyne.Do(func() {
+				activityListBox.RemoveAll()
+				for _, act := range currentActivities {
+					row := buildActivityRow(act)
+					activityListBox.Add(row)
+				}
+			})
 		}()
 	}
 
 	// --- Layout ---
 	title := widget.NewRichTextFromMarkdown("## MyWhoosh → Garmin")
 
-	form := container.NewVBox(
-		title,
-		widget.NewSeparator(),
-		widget.NewLabel("MyWhoosh Directory"),
-		dirEntry,
-		findBtn,
-		widget.NewSeparator(),
-		widget.NewLabel("Garmin Connect"),
-		emailEntry,
-		passwordEntry,
-		syncBtn,
-		widget.NewSeparator(),
+	mywhooshSection := container.NewVBox(
+		widget.NewLabel("MyWhoosh Account"),
+		mwEmailEntry,
+		mwPasswordEntry,
+		mwStatusLabel,
 	)
 
-	content := container.NewBorder(form, nil, nil, nil, logScroll)
+	garminSection := container.NewVBox(
+		widget.NewLabel("Garmin Connect"),
+		garminEmailEntry,
+		garminPasswordEntry,
+		garminStatusLabel,
+	)
+
+	credentialsRow := container.New(layout.NewGridWrapLayout(fyne.NewSize(340, 160)),
+		mywhooshSection, garminSection,
+	)
+
+	activitiesHeader := container.NewBorder(nil, nil, nil,
+		uploadAllBtn,
+		widget.NewRichTextFromMarkdown("### Activities (last 10 days)"),
+	)
+
+	topForm := container.NewVBox(
+		title,
+		widget.NewSeparator(),
+		credentialsRow,
+		widget.NewSeparator(),
+		fetchBtn,
+		widget.NewSeparator(),
+		activitiesHeader,
+	)
+
+	content := container.NewBorder(topForm, logScroll, nil, nil, activityScroll)
 	w.SetContent(content)
 	w.ShowAndRun()
 }

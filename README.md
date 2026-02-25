@@ -2,6 +2,8 @@
 
 A single-executable GUI app that syncs your [MyWhoosh](https://www.mywhoosh.com/) indoor cycling activities to [Garmin Connect](https://connect.garmin.com/) — with full training effect, VO2max, and performance stats support.
 
+No need to run this on the same PC as MyWhoosh — the app downloads activities directly from your MyWhoosh account.
+
 ![MyWhoosh2Garmin](images/screenshot.jpg)
 
 ## Why?
@@ -29,18 +31,17 @@ Grab the latest release for your platform from the [**Releases**](../../releases
 | Platform | File |
 |---|---|
 | Windows | `mywhoosh2garmin-windows-amd64.exe` |
+| Linux | `mywhoosh2garmin-linux-amd64` |
 
 No installation needed — just download and run.
 
 ## How to Use
 
-### 1. Set the MyWhoosh directory
+### 1. Enter MyWhoosh credentials
 
-Click **🔍 Find MyWhoosh Dir** — the app will auto-detect the FIT file location:
+Enter your **MyWhoosh email** and **password**. These are used to log in to the MyWhoosh API and fetch your activity list.
 
-- **Windows**: `%LOCALAPPDATA%\Packages\MyWhooshTechnologyService...\...\Content\Data`
-
-If auto-detection doesn't work, a folder picker will open so you can select the directory manually.
+After the first login, the session token is cached locally (`~/.mywhoosh2garmin/`) so you won't need to enter your password again unless the token expires.
 
 ### 2. Enter Garmin credentials
 
@@ -48,17 +49,27 @@ Enter your **Garmin Connect email** and **password**. These are only sent direct
 
 After the first login, a session token is cached locally (`~/.mywhoosh2garmin/`) and reused for up to a year. You won't need to enter your password again unless the token expires.
 
-### 3. Click Sync
+### 3. Fetch Activities
 
-Click **🔄 Sync to Garmin** and the app will:
+Click **📋 Fetch Activities (last 10 days)** and the app will:
 
-1. Scan for FIT files modified in the last 30 days
-2. Skip any that were already synced (`.synced` marker files)
-3. Fix averages, strip temperature, spoof device identity
-4. Upload each file to Garmin Connect
-5. Mark successfully uploaded files so they won't be uploaded again
+1. Log in to your MyWhoosh account (or resume a cached session)
+2. Fetch your activities from the last 10 days
+3. Display them in a list showing date, title, distance, duration, power, and heart rate — with an upload button next to each one
 
-That's it. Your rides will appear on Garmin Connect within seconds.
+### 4. Upload to Garmin
+
+You can either:
+
+- Click **⬆ Upload** next to individual activities to upload them one by one
+- Click **⬆ Upload All to Garmin** to upload all unsynced activities at once
+
+For each activity, the app will:
+
+1. Download the FIT file from MyWhoosh
+2. Fix averages, strip temperature, spoof device identity
+3. Upload to Garmin Connect
+4. Mark the activity as synced so it won't be uploaded again
 
 ## Building from Source
 
@@ -88,9 +99,13 @@ go test ./...
 ## How It Works
 
 ```
-MyWhoosh FIT file
-       │
-       ▼
+  ┌─────────────────────┐
+  │  MyWhoosh Web API   │
+  │  Login + List       │
+  │  Download FIT file  │
+  └─────────┬───────────┘
+            │
+            ▼
   ┌─────────────────────┐
   │  Decode FIT (V2)    │
   │  Fix session avgs   │
