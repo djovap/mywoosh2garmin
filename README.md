@@ -4,7 +4,6 @@ A single-executable GUI app that syncs your [MyWhoosh](https://www.mywhoosh.com/
 
 No need to run this on the same PC as MyWhoosh — the app downloads activities directly from your MyWhoosh account.
 
-![MyWhoosh2Garmin](images/screenshot.jpg)
 
 ## Why?
 
