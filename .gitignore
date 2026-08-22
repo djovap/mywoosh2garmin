@@ -9,6 +9,7 @@ mywhoosh2garmin
 # App config/tokens (contain credentials)
 .mywhoosh2garmin/
 .garth/
+.env
 
 # Test artifacts
 /tmp/

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"mywhoosh2garmin/garmin"
 	"mywhoosh2garmin/mywhoosh"
 )
@@ -19,6 +21,7 @@ const (
 	myWhooshPasswordEnv = "MYWHOOSH_PASSWORD"
 	garminEmailEnv      = "GARMIN_EMAIL"
 	garminPasswordEnv   = "GARMIN_PASSWORD"
+	garminGearEnv       = "GARMIN_GEAR"
 )
 
 // syncedTracker records uploads so repeated runs do not upload the same
@@ -90,6 +93,16 @@ type credentials struct {
 	myWhooshPassword string
 	garminEmail      string
 	garminPassword   string
+	garminGear       string
+}
+
+// loadDotenv loads credentials from .env in the current directory when it exists.
+// Explicitly exported environment variables take precedence over values in .env.
+func loadDotenv() error {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load .env: %w", err)
+	}
+	return nil
 }
 
 func credentialsFromEnv() (credentials, error) {
@@ -98,9 +111,10 @@ func credentialsFromEnv() (credentials, error) {
 		myWhooshPassword: os.Getenv(myWhooshPasswordEnv),
 		garminEmail:      os.Getenv(garminEmailEnv),
 		garminPassword:   os.Getenv(garminPasswordEnv),
+		garminGear:       os.Getenv(garminGearEnv),
 	}
 
-	missing := make([]string, 0, 4)
+	missing := make([]string, 0, 5)
 	for _, variable := range []struct {
 		name  string
 		value string
@@ -109,6 +123,7 @@ func credentialsFromEnv() (credentials, error) {
 		{myWhooshPasswordEnv, creds.myWhooshPassword},
 		{garminEmailEnv, creds.garminEmail},
 		{garminPasswordEnv, creds.garminPassword},
+		{garminGearEnv, creds.garminGear},
 	} {
 		if strings.TrimSpace(variable.value) == "" {
 			missing = append(missing, variable.name)
@@ -128,7 +143,15 @@ func main() {
 }
 
 func run() error {
+	if err := loadDotenv(); err != nil {
+		return err
+	}
+
 	creds, err := credentialsFromEnv()
+	if err != nil {
+		return err
+	}
+	gear, err := parseGarminGear(creds.garminGear)
 	if err != nil {
 		return err
 	}
@@ -196,7 +219,7 @@ func run() error {
 		}
 
 		fmt.Printf("[%d/%d] Syncing %s (%s)...\n", index+1, len(activities), activity.DisplayName(), activity.FormattedDate())
-		if err := syncActivity(myWhooshClient, garminClient, tracker, activity, tempDir, index); err != nil {
+		if err := syncActivity(myWhooshClient, garminClient, tracker, gear, activity, tempDir, index); err != nil {
 			if strings.Contains(err.Error(), "duplicate") {
 				fmt.Println("  Already in Garmin Connect.")
 				if markErr := tracker.MarkSynced(activity.ID); markErr != nil {
@@ -222,7 +245,7 @@ func run() error {
 	return nil
 }
 
-func syncActivity(myWhooshClient *mywhoosh.Client, garminClient *garmin.Client, tracker *syncedTracker, activity mywhoosh.Activity, tempDir string, index int) error {
+func syncActivity(myWhooshClient *mywhoosh.Client, garminClient *garmin.Client, tracker *syncedTracker, gear garminGear, activity mywhoosh.Activity, tempDir string, index int) error {
 	fileID := activity.ActivityFileID
 	if fileID == "" {
 		fileID = activity.ID
@@ -238,7 +261,7 @@ func syncActivity(myWhooshClient *mywhoosh.Client, garminClient *garmin.Client, 
 	if err := os.WriteFile(inputPath, fitData, 0o600); err != nil {
 		return fmt.Errorf("write FIT file: %w", err)
 	}
-	if err := fixFitFile(inputPath, outputPath); err != nil {
+	if err := fixFitFile(inputPath, outputPath, gear); err != nil {
 		return fmt.Errorf("fix FIT file: %w", err)
 	}
 	if err := garminClient.UploadFIT(outputPath); err != nil {

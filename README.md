@@ -19,7 +19,7 @@ MyWhoosh2Garmin fixes all of this automatically:
 |---|---|
 | Missing avg power / HR / cadence | Calculated from ride records |
 | Fake temperature data | Stripped from all records |
-| MyWhoosh device identity | Spoofed to Garmin Fenix 6S Pro |
+| Device identity | Set to your selected Garmin gear |
 
 The result: your indoor rides show up on Garmin Connect just like a native Garmin recording, complete with **Training Effect**, **VO2max updates**, **Training Load**, and **Training Status**.
 
@@ -29,16 +29,25 @@ This fork is intended to be built and run on the local machine.
 
 ## Usage
 
-Set all four credentials as environment variables, then run the program:
+Create a `.env` file in the project directory with the required settings:
+
+```dotenv
+MYWHOOSH_EMAIL="you@example.com"
+MYWHOOSH_PASSWORD="your-mywhoosh-password"
+GARMIN_EMAIL="you@example.com"
+GARMIN_PASSWORD="your-garmin-password"
+GARMIN_GEAR="forerunner-265"
+```
+
+Then run the program:
 
 ```bash
-export MYWHOOSH_EMAIL="you@example.com"
-export MYWHOOSH_PASSWORD="your-mywhoosh-password"
-export GARMIN_EMAIL="you@example.com"
-export GARMIN_PASSWORD="your-garmin-password"
-
 go run .
 ```
+
+The `.env` file is ignored by Git. Explicitly exported environment variables override values in `.env`.
+
+`GARMIN_GEAR` selects the Garmin device recorded in the generated FIT file. Use `forerunner-265` for a Forerunner 265, `forerunner-265s` for a 265S, or a numeric Garmin FIT product ID for another device.
 
 The tool finds activities whose start time falls on the current local calendar day, then downloads, fixes, and uploads each unsynced activity. It exits successfully when there are no activities to sync.
 
@@ -80,7 +89,7 @@ go test ./...
   │  Decode FIT (V2)    │
   │  Fix session avgs   │
   │  Strip temperature  │
-  │  Spoof → Fenix 6S   │
+  │  Set Garmin gear    │
   │  Encode FIT (V2)    │
   └─────────┬───────────┘
             │

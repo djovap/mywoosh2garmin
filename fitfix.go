@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/muktihari/fit/decoder"
 	"github.com/muktihari/fit/encoder"
@@ -18,14 +20,40 @@ const (
 	sint8Invalid  = int8(0x7F)
 )
 
-// Device spoofing constants.
 const (
-	garminManufacturer = typedef.ManufacturerGarmin   // 1
-	fenix6sProduct     = typedef.GarminProductFenix6s // 3288
-	fakeSerialNumber   = uint32(3420897194)
+	garminManufacturer = typedef.ManufacturerGarmin // 1
+	fitSerialNumber    = uint32(3420897194)
 )
 
-// logFn can be overridden to redirect log output (e.g., to a GUI).
+// garminGear identifies the Garmin FIT product encoded in uploaded activities.
+type garminGear struct {
+	product typedef.GarminProduct
+	name    string
+}
+
+// parseGarminGear accepts common model names or a numeric Garmin FIT product ID.
+func parseGarminGear(value string) (garminGear, error) {
+	raw := strings.TrimSpace(value)
+	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(raw))
+
+	switch normalized {
+	case "forerunner265", "fr265":
+		return garminGear{typedef.GarminProductFr265Large, "Garmin Forerunner 265"}, nil
+	case "forerunner265s", "fr265s":
+		return garminGear{typedef.GarminProductFr265Small, "Garmin Forerunner 265S"}, nil
+	}
+
+	productID, err := strconv.ParseUint(raw, 10, 16)
+	if err != nil || productID == 0 {
+		return garminGear{}, fmt.Errorf("invalid GARMIN_GEAR %q; use forerunner-265, forerunner-265s, or a Garmin FIT product ID", value)
+	}
+	return garminGear{
+		product: typedef.GarminProduct(productID),
+		name:    fmt.Sprintf("Garmin product %d", productID),
+	}, nil
+}
+
+// logFn can be overridden to redirect log output (e.g., in tests).
 var logFn = func(format string, args ...interface{}) {
 	fmt.Printf(format, args...)
 }
@@ -35,8 +63,8 @@ var logFn = func(format string, args ...interface{}) {
 // ---------------------------------------------------------------------------
 
 // fixFitFile reads a MyWhoosh FIT activity, fixes missing session averages,
-// strips temperature from records, spoofs the device, and writes the result.
-func fixFitFile(inputPath, outputPath string) error {
+// strips temperature from records, sets the selected Garmin gear, and writes the result.
+func fixFitFile(inputPath, outputPath string, gear garminGear) error {
 	f, err := os.Open(inputPath)
 	if err != nil {
 		return err
@@ -97,8 +125,8 @@ func fixFitFile(inputPath, outputPath string) error {
 		}
 	}
 
-	// Spoof device
-	spoofDevice(activity)
+	// Set the Garmin gear selected through GARMIN_GEAR.
+	setGarminGear(activity, gear)
 
 	// Encode
 	fit := activity.ToFIT(nil)
@@ -132,19 +160,21 @@ func avgU8(vals []uint8) uint8 {
 }
 
 // ---------------------------------------------------------------------------
-// Device spoofing
+// Garmin gear
 // ---------------------------------------------------------------------------
 
-func spoofDevice(activity *filedef.Activity) {
+func setGarminGear(activity *filedef.Activity, gear garminGear) {
 	activity.FileId.Manufacturer = garminManufacturer
-	activity.FileId.Product = fenix6sProduct.Uint16()
-	activity.FileId.SerialNumber = fakeSerialNumber
+	activity.FileId.Product = gear.product.Uint16()
+	activity.FileId.ProductName = gear.name
+	activity.FileId.SerialNumber = fitSerialNumber
 
 	for _, di := range activity.DeviceInfos {
 		di.Manufacturer = garminManufacturer
-		di.Product = fenix6sProduct.Uint16()
-		di.SerialNumber = fakeSerialNumber
+		di.Product = gear.product.Uint16()
+		di.ProductName = gear.name
+		di.SerialNumber = fitSerialNumber
 	}
 
-	logFn("  → device spoofed: Garmin Fenix 6S Pro (product %d)\n", fenix6sProduct)
+	logFn("  → Garmin gear: %s (product %d)\n", gear.name, gear.product)
 }

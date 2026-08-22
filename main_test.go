@@ -26,7 +26,8 @@ func createTestFitFile(t *testing.T, path string) {
 		SetType(typedef.FileActivity).
 		SetTimeCreated(now).
 		SetManufacturer(typedef.ManufacturerDevelopment).
-		SetProduct(0)
+		SetProduct(0).
+		SetProductName("Garmin Forerunner 255")
 
 	// Add records with known values: power=200, HR=150, cadence=90, temp=25
 	for i := 0; i < 10; i++ {
@@ -78,13 +79,24 @@ func TestCredentialsFromEnv(t *testing.T) {
 	t.Setenv(myWhooshPasswordEnv, "mywhoosh-password")
 	t.Setenv(garminEmailEnv, "garmin@example.com")
 	t.Setenv(garminPasswordEnv, "garmin-password")
+	t.Setenv(garminGearEnv, "forerunner-265")
 
 	creds, err := credentialsFromEnv()
 	if err != nil {
 		t.Fatalf("credentialsFromEnv returned an error: %v", err)
 	}
-	if creds.myWhooshEmail != "mywhoosh@example.com" || creds.garminEmail != "garmin@example.com" {
-		t.Errorf("credentialsFromEnv returned unexpected emails: %#v", creds)
+	if creds.myWhooshEmail != "mywhoosh@example.com" || creds.garminEmail != "garmin@example.com" || creds.garminGear != "forerunner-265" {
+		t.Errorf("credentialsFromEnv returned unexpected values: %#v", creds)
+	}
+}
+
+func TestParseGarminGear(t *testing.T) {
+	gear, err := parseGarminGear("forerunner-265")
+	if err != nil {
+		t.Fatalf("parseGarminGear returned an error: %v", err)
+	}
+	if gear.product != typedef.GarminProductFr265Large {
+		t.Errorf("product = %d, want %d", gear.product, typedef.GarminProductFr265Large)
 	}
 }
 
@@ -97,7 +109,11 @@ func TestFixFitFile(t *testing.T) {
 	createTestFitFile(t, inputPath)
 
 	// Run the fixer
-	if err := fixFitFile(inputPath, outputPath); err != nil {
+	gear, err := parseGarminGear("forerunner-265")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixFitFile(inputPath, outputPath, gear); err != nil {
 		t.Fatalf("fixFitFile failed: %v", err)
 	}
 
@@ -147,5 +163,11 @@ func TestFixFitFile(t *testing.T) {
 	}
 	if sess.AvgCadence != 90 {
 		t.Errorf("avg cadence: got %d, want 90", sess.AvgCadence)
+	}
+	if result.FileId.Product != typedef.GarminProductFr265Large.Uint16() {
+		t.Errorf("device product: got %d, want %d", result.FileId.Product, typedef.GarminProductFr265Large)
+	}
+	if result.FileId.ProductName != "Garmin Forerunner 265" {
+		t.Errorf("device name: got %q, want %q", result.FileId.ProductName, "Garmin Forerunner 265")
 	}
 }
