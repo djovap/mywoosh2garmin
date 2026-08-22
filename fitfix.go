@@ -3,13 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"regexp"
-	"runtime"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/muktihari/fit/decoder"
 	"github.com/muktihari/fit/encoder"
@@ -35,96 +28,6 @@ const (
 // logFn can be overridden to redirect log output (e.g., to a GUI).
 var logFn = func(format string, args ...interface{}) {
 	fmt.Printf(format, args...)
-}
-
-// ---------------------------------------------------------------------------
-// MyWhoosh directory detection
-// ---------------------------------------------------------------------------
-
-func findMyWhooshDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		p := filepath.Join(home,
-			"Library", "Containers", "com.whoosh.whooshgame",
-			"Data", "Library", "Application Support",
-			"Epic", "MyWhoosh", "Content", "Data")
-		if isDir(p) {
-			return p, nil
-		}
-		return "", fmt.Errorf("not found: %s", p)
-
-	case "windows":
-		base := filepath.Join(home, "AppData", "Local", "Packages")
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			return "", err
-		}
-		for _, e := range entries {
-			if e.IsDir() && strings.HasPrefix(e.Name(), "MyWhooshTechnologyService.") {
-				p := filepath.Join(base, e.Name(),
-					"LocalCache", "Local", "MyWhoosh", "Content", "Data")
-				if isDir(p) {
-					return p, nil
-				}
-			}
-		}
-		return "", fmt.Errorf("MyWhoosh not found in %s", base)
-
-	default:
-		return "", fmt.Errorf("no auto-detection for %s — use the directory picker", runtime.GOOS)
-	}
-}
-
-func isDir(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
-// ---------------------------------------------------------------------------
-// FIT file discovery
-// ---------------------------------------------------------------------------
-
-// findMostRecentFitFile returns the MyNewActivity-*.fit file with the highest
-// version number (e.g. MyNewActivity-3.8.5.fit > MyNewActivity-3.7.0.fit).
-func findMostRecentFitFile(dir string) (string, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "MyNewActivity-*.fit"))
-	if err != nil {
-		return "", err
-	}
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no MyNewActivity-*.fit files in %s", dir)
-	}
-
-	re := regexp.MustCompile(`\d+`)
-	sort.Slice(matches, func(i, j int) bool {
-		vi := re.FindAllString(filepath.Base(matches[i]), -1)
-		vj := re.FindAllString(filepath.Base(matches[j]), -1)
-		return cmpVersionParts(vi, vj) > 0
-	})
-
-	return matches[0], nil
-}
-
-func cmpVersionParts(a, b []string) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		ai, _ := strconv.Atoi(a[i])
-		bi, _ := strconv.Atoi(b[i])
-		if ai != bi {
-			return ai - bi
-		}
-	}
-	return len(a) - len(b)
-}
-
-func generateOutputFilename(inputPath string) string {
-	name := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
-	ts := time.Now().Format("2006-01-02_150405")
-	return fmt.Sprintf("%s_%s.fit", name, ts)
 }
 
 // ---------------------------------------------------------------------------
@@ -244,54 +147,4 @@ func spoofDevice(activity *filedef.Activity) {
 	}
 
 	logFn("  → device spoofed: Garmin Fenix 6S Pro (product %d)\n", fenix6sProduct)
-}
-
-// ---------------------------------------------------------------------------
-// Sync helpers
-// ---------------------------------------------------------------------------
-
-// findUnsyncedFitFiles returns *.fit files modified in the last 30 days
-// that don't have a .synced marker file next to them.
-func findUnsyncedFitFiles(dir string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.fit"))
-	if err != nil {
-		return nil, err
-	}
-
-	cutoff := time.Now().AddDate(0, 0, -30)
-	var result []string
-
-	for _, path := range matches {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			continue
-		}
-		if isSynced(path) {
-			continue
-		}
-		result = append(result, path)
-	}
-
-	// Sort oldest first so we upload in chronological order
-	sort.Slice(result, func(i, j int) bool {
-		ii, _ := os.Stat(result[i])
-		jj, _ := os.Stat(result[j])
-		return ii.ModTime().Before(jj.ModTime())
-	})
-
-	return result, nil
-}
-
-// isSynced checks if a .synced marker file exists for the given FIT file.
-func isSynced(fitPath string) bool {
-	_, err := os.Stat(fitPath + ".synced")
-	return err == nil
-}
-
-// markSynced creates a .synced marker file next to the FIT file.
-func markSynced(fitPath string) error {
-	return os.WriteFile(fitPath+".synced", []byte(time.Now().Format(time.RFC3339)), 0o644)
 }

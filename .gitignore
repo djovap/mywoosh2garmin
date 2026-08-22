@@ -1,8 +1,7 @@
 # Binaries
 mywhoosh2garmin
-mywhoosh2garmin.exe
-dist/
 
+.env
 # FIT files and sync markers
 *.fit
 *.fit.synced

@@ -73,6 +73,21 @@ func createTestFitFile(t *testing.T, path string) {
 	}
 }
 
+func TestCredentialsFromEnv(t *testing.T) {
+	t.Setenv(myWhooshEmailEnv, "mywhoosh@example.com")
+	t.Setenv(myWhooshPasswordEnv, "mywhoosh-password")
+	t.Setenv(garminEmailEnv, "garmin@example.com")
+	t.Setenv(garminPasswordEnv, "garmin-password")
+
+	creds, err := credentialsFromEnv()
+	if err != nil {
+		t.Fatalf("credentialsFromEnv returned an error: %v", err)
+	}
+	if creds.myWhooshEmail != "mywhoosh@example.com" || creds.garminEmail != "garmin@example.com" {
+		t.Errorf("credentialsFromEnv returned unexpected emails: %#v", creds)
+	}
+}
+
 func TestFixFitFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "MyNewActivity-3.8.5.fit")
@@ -133,50 +148,4 @@ func TestFixFitFile(t *testing.T) {
 	if sess.AvgCadence != 90 {
 		t.Errorf("avg cadence: got %d, want 90", sess.AvgCadence)
 	}
-}
-
-func TestFindMostRecentFitFile(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create fake FIT files with different version numbers
-	files := []string{
-		"MyNewActivity-3.7.0.fit",
-		"MyNewActivity-3.8.5.fit",
-		"MyNewActivity-3.8.1.fit",
-	}
-	for _, name := range files {
-		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("fake"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	got, err := findMostRecentFitFile(tmpDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := filepath.Join(tmpDir, "MyNewActivity-3.8.5.fit")
-	if got != want {
-		t.Errorf("got %s, want %s", got, want)
-	}
-}
-
-func TestGenerateOutputFilename(t *testing.T) {
-	name := generateOutputFilename("/some/path/MyNewActivity-3.8.5.fit")
-	if !contains(name, "MyNewActivity-3.8.5_") || !contains(name, ".fit") {
-		t.Errorf("unexpected filename: %s", name)
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstr(s, substr)
-}
-
-func searchSubstr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

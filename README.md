@@ -1,8 +1,8 @@
 # MyWhoosh2Garmin
 
-A single-executable GUI app that syncs your [MyWhoosh](https://www.mywhoosh.com/) indoor cycling activities to [Garmin Connect](https://connect.garmin.com/) — with full training effect, VO2max, and performance stats support.
+A command-line tool that syncs today's [MyWhoosh](https://www.mywhoosh.com/) indoor cycling activities to [Garmin Connect](https://connect.garmin.com/) — with full training effect, VO2max, and performance stats support.
 
-No need to run this on the same PC as MyWhoosh — the app downloads activities directly from your MyWhoosh account.
+It downloads activities directly from your MyWhoosh account, so it does not need to run on the same machine as MyWhoosh.
 
 
 ## Why?
@@ -23,70 +23,41 @@ MyWhoosh2Garmin fixes all of this automatically:
 
 The result: your indoor rides show up on Garmin Connect just like a native Garmin recording, complete with **Training Effect**, **VO2max updates**, **Training Load**, and **Training Status**.
 
-## Download
+## Run locally
 
-Grab the latest release for your platform from the [**Releases**](../../releases) page:
+This fork is intended to be built and run on the local machine.
 
-| Platform | File |
-|---|---|
-| Windows | `mywhoosh2garmin-windows-amd64.exe` |
-| Linux | `mywhoosh2garmin-linux-amd64` |
+## Usage
 
-No installation needed — just download and run.
+Set all four credentials as environment variables, then run the program:
 
-## How to Use
+```bash
+export MYWHOOSH_EMAIL="you@example.com"
+export MYWHOOSH_PASSWORD="your-mywhoosh-password"
+export GARMIN_EMAIL="you@example.com"
+export GARMIN_PASSWORD="your-garmin-password"
 
-### 1. Enter MyWhoosh credentials
+go run .
+```
 
-Enter your **MyWhoosh email** and **password**. These are used to log in to the MyWhoosh API and fetch your activity list.
+The tool finds activities whose start time falls on the current local calendar day, then downloads, fixes, and uploads each unsynced activity. It exits successfully when there are no activities to sync.
 
-After the first login, the session token is cached locally (`~/.mywhoosh2garmin/`) so you won't need to enter your password again unless the token expires.
-
-### 2. Enter Garmin credentials
-
-Enter your **Garmin Connect email** and **password**. These are only sent directly to Garmin's SSO servers — never stored or sent anywhere else.
-
-After the first login, a session token is cached locally (`~/.mywhoosh2garmin/`) and reused for up to a year. You won't need to enter your password again unless the token expires.
-
-### 3. Fetch Activities
-
-Click **📋 Fetch Activities (last 10 days)** and the app will:
-
-1. Log in to your MyWhoosh account (or resume a cached session)
-2. Fetch your activities from the last 10 days
-3. Display them in a list showing date, title, distance, duration, power, and heart rate — with an upload button next to each one
-
-### 4. Upload to Garmin
-
-You can either:
-
-- Click **⬆ Upload** next to individual activities to upload them one by one
-- Click **⬆ Upload All to Garmin** to upload all unsynced activities at once
-
-For each activity, the app will:
-
-1. Download the FIT file from MyWhoosh
-2. Fix averages, strip temperature, spoof device identity
-3. Upload to Garmin Connect
-4. Mark the activity as synced so it won't be uploaded again
+Sessions and the synced-activity tracker are stored locally in `~/.mywhoosh2garmin/`. Credentials are never written there. A Garmin duplicate is treated as already synced.
 
 ## Building from Source
 
 ### Prerequisites
 
 - Go 1.24+
-- GCC (for Fyne/CGO)
-- Windows cross-compile from Linux: `mingw-w64`, `libgl-dev`, `xorg-dev`, `libxxf86vm-dev`
 
 ### Build
 
 ```bash
-# Linux
+# Build a native executable
 go build -o mywhoosh2garmin .
 
-# Both platforms (requires mingw-w64)
-./build.sh
-# Output in dist/
+# Or build and start it directly
+go run .
 ```
 
 ### Run tests
@@ -131,7 +102,6 @@ go test ./...
 
 - [garth](https://github.com/matin/garth) by matin — Garmin SSO authentication reference
 - [muktihari/fit](https://github.com/muktihari/fit) — FIT SDK for Go
-- [Fyne](https://fyne.io/) — cross-platform GUI toolkit
 
 ## License
 

@@ -293,25 +293,26 @@ func (c *Client) GetActivities() ([]Activity, error) {
 	return allActivities, nil
 }
 
-// GetRecentActivities returns activities from the last N days.
-func (c *Client) GetRecentActivities(days int) ([]Activity, error) {
+// GetTodayActivities returns activities that started on the local calendar day
+// containing now. MyWhoosh returns activities newest first.
+func (c *Client) GetTodayActivities(now time.Time) ([]Activity, error) {
 	all, err := c.GetActivities()
 	if err != nil {
 		return nil, err
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -days).Unix()
-	var recent []Activity
-	for _, a := range all {
-		if a.DateUnix() >= cutoff {
-			recent = append(recent, a)
-		} else {
-			// Activities are sorted DESC, so once we pass the cutoff we can stop
-			break
+	localNow := now.In(time.Local)
+	startOfDay := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.Local)
+	endOfDay := startOfDay.AddDate(0, 0, 1)
+
+	var today []Activity
+	for _, activity := range all {
+		startedAt := time.Unix(activity.DateUnix(), 0).In(time.Local)
+		if !startedAt.Before(startOfDay) && startedAt.Before(endOfDay) {
+			today = append(today, activity)
 		}
 	}
-
-	return recent, nil
+	return today, nil
 }
 
 // DownloadFitFile downloads the FIT file for a given activity and returns the raw bytes.
