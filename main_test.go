@@ -79,24 +79,23 @@ func TestCredentialsFromEnv(t *testing.T) {
 	t.Setenv(myWhooshPasswordEnv, "mywhoosh-password")
 	t.Setenv(garminEmailEnv, "garmin@example.com")
 	t.Setenv(garminPasswordEnv, "garmin-password")
-	t.Setenv(garminGearEnv, "forerunner-265")
 
 	creds, err := credentialsFromEnv()
 	if err != nil {
 		t.Fatalf("credentialsFromEnv returned an error: %v", err)
 	}
-	if creds.myWhooshEmail != "mywhoosh@example.com" || creds.garminEmail != "garmin@example.com" || creds.garminGear != "forerunner-265" {
+	if creds.myWhooshEmail != "mywhoosh@example.com" || creds.garminEmail != "garmin@example.com" {
 		t.Errorf("credentialsFromEnv returned unexpected values: %#v", creds)
 	}
 }
 
-func TestParseGarminGear(t *testing.T) {
-	gear, err := parseGarminGear("forerunner-265")
-	if err != nil {
-		t.Fatalf("parseGarminGear returned an error: %v", err)
-	}
+func TestForerunner265Gear(t *testing.T) {
+	gear := forerunner265Gear()
 	if gear.product != typedef.GarminProductFr265Large {
 		t.Errorf("product = %d, want %d", gear.product, typedef.GarminProductFr265Large)
+	}
+	if gear.name != "Garmin Forerunner 265" {
+		t.Errorf("name = %q, want Garmin Forerunner 265", gear.name)
 	}
 }
 
@@ -109,10 +108,8 @@ func TestFixFitFile(t *testing.T) {
 	createTestFitFile(t, inputPath)
 
 	// Run the fixer
-	gear, err := parseGarminGear("forerunner-265")
-	if err != nil {
-		t.Fatal(err)
-	}
+	gear := forerunner265Gear()
+	gear.unitID = 987654
 	if err := fixFitFile(inputPath, outputPath, gear); err != nil {
 		t.Fatalf("fixFitFile failed: %v", err)
 	}
@@ -169,5 +166,8 @@ func TestFixFitFile(t *testing.T) {
 	}
 	if result.FileId.ProductName != "Garmin Forerunner 265" {
 		t.Errorf("device name: got %q, want %q", result.FileId.ProductName, "Garmin Forerunner 265")
+	}
+	if result.FileId.SerialNumber != 987654 {
+		t.Errorf("device unit ID: got %d, want 987654", result.FileId.SerialNumber)
 	}
 }

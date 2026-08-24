@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/muktihari/fit/decoder"
 	"github.com/muktihari/fit/encoder"
@@ -20,37 +18,24 @@ const (
 	sint8Invalid  = int8(0x7F)
 )
 
-const (
-	garminManufacturer = typedef.ManufacturerGarmin // 1
-	fitSerialNumber    = uint32(3420897194)
-)
+const garminManufacturer = typedef.ManufacturerGarmin // 1
 
-// garminGear identifies the Garmin FIT product encoded in uploaded activities.
+// garminGear identifies the registered Garmin device encoded in an uploaded
+// activity. unitID is the watch's FIT serial number from Garmin Connect.
 type garminGear struct {
 	product typedef.GarminProduct
 	name    string
+	unitID  uint32
 }
 
-// parseGarminGear accepts common model names or a numeric Garmin FIT product ID.
-func parseGarminGear(value string) (garminGear, error) {
-	raw := strings.TrimSpace(value)
-	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(raw))
-
-	switch normalized {
-	case "forerunner265", "fr265":
-		return garminGear{typedef.GarminProductFr265Large, "Garmin Forerunner 265"}, nil
-	case "forerunner265s", "fr265s":
-		return garminGear{typedef.GarminProductFr265Small, "Garmin Forerunner 265S"}, nil
-	}
-
-	productID, err := strconv.ParseUint(raw, 10, 16)
-	if err != nil || productID == 0 {
-		return garminGear{}, fmt.Errorf("invalid GARMIN_GEAR %q; use forerunner-265, forerunner-265s, or a Garmin FIT product ID", value)
-	}
+// forerunner265Gear returns the FIT identity for the non-S Forerunner 265.
+// Garmin assigns it product ID 4257; the account-specific unit ID is resolved
+// from the registered devices API before every upload.
+func forerunner265Gear() garminGear {
 	return garminGear{
-		product: typedef.GarminProduct(productID),
-		name:    fmt.Sprintf("Garmin product %d", productID),
-	}, nil
+		product: typedef.GarminProductFr265Large,
+		name:    "Garmin Forerunner 265",
+	}
 }
 
 // logFn can be overridden to redirect log output (e.g., in tests).
@@ -63,7 +48,7 @@ var logFn = func(format string, args ...interface{}) {
 // ---------------------------------------------------------------------------
 
 // fixFitFile reads a MyWhoosh FIT activity, fixes missing session averages,
-// strips temperature from records, sets the selected Garmin gear, and writes the result.
+// strips temperature from records, sets the registered Garmin gear, and writes the result.
 func fixFitFile(inputPath, outputPath string, gear garminGear) error {
 	f, err := os.Open(inputPath)
 	if err != nil {
@@ -125,7 +110,7 @@ func fixFitFile(inputPath, outputPath string, gear garminGear) error {
 		}
 	}
 
-	// Set the Garmin gear selected through GARMIN_GEAR.
+	// Set the authenticated user's registered Garmin gear.
 	setGarminGear(activity, gear)
 
 	// Encode
@@ -167,13 +152,14 @@ func setGarminGear(activity *filedef.Activity, gear garminGear) {
 	activity.FileId.Manufacturer = garminManufacturer
 	activity.FileId.Product = gear.product.Uint16()
 	activity.FileId.ProductName = gear.name
-	activity.FileId.SerialNumber = fitSerialNumber
+	activity.FileId.SerialNumber = gear.unitID
 
 	for _, di := range activity.DeviceInfos {
 		di.Manufacturer = garminManufacturer
 		di.Product = gear.product.Uint16()
 		di.ProductName = gear.name
-		di.SerialNumber = fitSerialNumber
+		di.SerialNumber = gear.unitID
+		di.SoftwareVersion = uint16Invalid
 	}
 
 	logFn("  → Garmin gear: %s (product %d)\n", gear.name, gear.product)

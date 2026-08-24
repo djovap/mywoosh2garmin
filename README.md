@@ -19,7 +19,7 @@ MyWhoosh2Garmin fixes all of this automatically:
 |---|---|
 | Missing avg power / HR / cadence | Calculated from ride records |
 | Fake temperature data | Stripped from all records |
-| Device identity | Set to your selected Garmin gear |
+| Device identity | Set to your registered Forerunner 265 |
 
 The result: your indoor rides show up on Garmin Connect just like a native Garmin recording, complete with **Training Effect**, **VO2max updates**, **Training Load**, and **Training Status**.
 
@@ -36,7 +36,6 @@ MYWHOOSH_EMAIL="you@example.com"
 MYWHOOSH_PASSWORD="your-mywhoosh-password"
 GARMIN_EMAIL="you@example.com"
 GARMIN_PASSWORD="your-garmin-password"
-GARMIN_GEAR="forerunner-265"
 ```
 
 Then run the program:
@@ -47,11 +46,26 @@ go run .
 
 The `.env` file is ignored by Git. Explicitly exported environment variables override values in `.env`.
 
-`GARMIN_GEAR` selects the Garmin device recorded in the generated FIT file. Use `forerunner-265` for a Forerunner 265, `forerunner-265s` for a 265S, or a numeric Garmin FIT product ID for another device.
+This app is configured for a **Forerunner 265** (FIT product ID `4257`). After signing in, it finds the matching registered watch by FIT product ID or Garmin Connect's exact model name, then writes that account-specific FIT unit ID into the formatted activity. It stops if the watch cannot be found—there is no configurable product or fallback serial number to spoof.
 
 The tool finds activities whose start time falls on the current local calendar day, then downloads, fixes, and uploads each unsynced activity. It exits successfully when there are no activities to sync.
 
 Sessions and the synced-activity tracker are stored locally in `~/.mywhoosh2garmin/`. Credentials are never written there. A Garmin duplicate is treated as already synced.
+
+## Automatically sync after MyWhoosh closes (macOS)
+
+Install the event-driven watcher once:
+
+```bash
+./install-mywhoosh-watcher.zsh
+```
+
+It builds the Go sync binary and a small macOS `NSWorkspace` watcher, then installs the watcher as a per-user LaunchAgent. It starts at login and receives app launch/termination events—there is no polling.
+
+- When MyWhoosh (`com.whoosh.whooshgame`) opens, it launches `BikeControl`.
+- When the final MyWhoosh process exits, it immediately runs `sync-when-mywhoosh-closes.zsh`, which executes `./mywhoosh2garmin`.
+
+The sync hook sources `~/.zshrc` before running, so credentials exported there are available in the LaunchAgent environment. Logs are written to `~/.mywhoosh2garmin/watcher.log` and `~/.mywhoosh2garmin/watcher-error.log`.
 
 ## Building from Source
 
