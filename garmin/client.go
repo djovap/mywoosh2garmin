@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 )
 
 const apiUserAgent = "GCM-iOS-5.19.1.2"
@@ -78,6 +81,128 @@ func (c *Client) Login(email, password string) error {
 		}
 	}
 	return nil
+}
+
+// UnitIDForDevice finds the FIT unit ID of a registered Garmin device. Garmin
+// Connect's device-service product ID is not always the FIT profile product ID,
+// so productName is used as an exact model-name fallback. FIT calls unitId
+// serial_number.
+func (c *Client) UnitIDForDevice(productID uint16, productName string) (uint32, error) {
+	if c.OAuth2 == nil {
+		return 0, fmt.Errorf("not authenticated")
+	}
+
+	url := fmt.Sprintf("https://connectapi.%s/device-service/deviceregistration/devices", c.Domain)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("create device request: %w", err)
+	}
+	req.Header.Set("Authorization", c.OAuth2.Bearer())
+	req.Header.Set("User-Agent", apiUserAgent)
+	req.Header.Set("DI-Backend", fmt.Sprintf("connectapi.%s", c.Domain))
+	req.Header.Set("NK", "NT")
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request registered devices: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read registered devices: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return 0, fmt.Errorf("fetch registered devices failed (HTTP %d): %s", resp.StatusCode, string(body[:min(300, len(body))]))
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var devices any
+	if err := decoder.Decode(&devices); err != nil {
+		return 0, fmt.Errorf("parse registered devices: %w", err)
+	}
+	unitID, ok := findUnitIDForDevice(devices, productID, productName)
+	if !ok {
+		return 0, fmt.Errorf("no registered Garmin device found with FIT product ID %d or model %q", productID, productName)
+	}
+	return unitID, nil
+}
+
+// findUnitIDForDevice searches Garmin's undocumented, versioned device-list
+// response for an object containing a FIT unit ID and either the matching
+// product ID or exact model display name.
+func findUnitIDForDevice(value any, productID uint16, productName string) (uint32, bool) {
+	switch value := value.(type) {
+	case []any:
+		for _, item := range value {
+			if unitID, ok := findUnitIDForDevice(item, productID, productName); ok {
+				return unitID, true
+			}
+		}
+	case map[string]any:
+		var product, unitID uint64
+		var name string
+		var hasProduct, hasUnitID bool
+		for key, fieldValue := range value {
+			switch normalizeDeviceField(key) {
+			case "productid", "garminproduct":
+				product, hasProduct = jsonUint(fieldValue)
+			case "product", "productdisplayname", "productname", "modelname":
+				if id, ok := jsonUint(fieldValue); ok {
+					product, hasProduct = id, true
+				} else if text, ok := fieldValue.(string); ok {
+					name = text
+				}
+			case "unitid":
+				unitID, hasUnitID = jsonUint(fieldValue)
+			}
+		}
+		matchesProduct := hasProduct && product == uint64(productID)
+		matchesName := normalizeDeviceName(name) != "" && normalizeDeviceName(name) == normalizeDeviceName(productName)
+		if hasUnitID && (matchesProduct || matchesName) && unitID > 0 && unitID <= uint64(^uint32(0)) {
+			return uint32(unitID), true
+		}
+		for _, child := range value {
+			if unitID, ok := findUnitIDForDevice(child, productID, productName); ok {
+				return unitID, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func normalizeDeviceField(field string) string {
+	return strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(field))
+}
+
+func normalizeDeviceName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimPrefix(name, "garmin ")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, name)
+}
+
+func jsonUint(value any) (uint64, bool) {
+	switch value := value.(type) {
+	case json.Number:
+		number, err := strconv.ParseUint(value.String(), 10, 64)
+		return number, err == nil
+	case string:
+		number, err := strconv.ParseUint(value, 10, 64)
+		return number, err == nil
+	case float64:
+		if value < 0 || value != float64(uint64(value)) {
+			return 0, false
+		}
+		return uint64(value), true
+	default:
+		return 0, false
+	}
 }
 
 // UploadFIT uploads a FIT file to Garmin Connect.
@@ -189,7 +314,7 @@ func parseUploadResult(status int, body []byte) error {
 	// Check for failures in the detailed result
 	var result struct {
 		DetailedImportResult struct {
-			Failures []interface{} `json:"failures"`
+			Failures  []interface{} `json:"failures"`
 			Successes []interface{} `json:"successes"`
 		} `json:"detailedImportResult"`
 	}

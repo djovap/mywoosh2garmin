@@ -21,7 +21,6 @@ const (
 	myWhooshPasswordEnv = "MYWHOOSH_PASSWORD"
 	garminEmailEnv      = "GARMIN_EMAIL"
 	garminPasswordEnv   = "GARMIN_PASSWORD"
-	garminGearEnv       = "GARMIN_GEAR"
 )
 
 // syncedTracker records uploads so repeated runs do not upload the same
@@ -93,7 +92,6 @@ type credentials struct {
 	myWhooshPassword string
 	garminEmail      string
 	garminPassword   string
-	garminGear       string
 }
 
 // loadDotenv loads credentials from .env in the current directory when it exists.
@@ -111,10 +109,9 @@ func credentialsFromEnv() (credentials, error) {
 		myWhooshPassword: os.Getenv(myWhooshPasswordEnv),
 		garminEmail:      os.Getenv(garminEmailEnv),
 		garminPassword:   os.Getenv(garminPasswordEnv),
-		garminGear:       os.Getenv(garminGearEnv),
 	}
 
-	missing := make([]string, 0, 5)
+	missing := make([]string, 0, 4)
 	for _, variable := range []struct {
 		name  string
 		value string
@@ -123,7 +120,6 @@ func credentialsFromEnv() (credentials, error) {
 		{myWhooshPasswordEnv, creds.myWhooshPassword},
 		{garminEmailEnv, creds.garminEmail},
 		{garminPasswordEnv, creds.garminPassword},
-		{garminGearEnv, creds.garminGear},
 	} {
 		if strings.TrimSpace(variable.value) == "" {
 			missing = append(missing, variable.name)
@@ -151,10 +147,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	gear, err := parseGarminGear(creds.garminGear)
-	if err != nil {
-		return err
-	}
+	gear := forerunner265Gear()
 
 	stateDir, err := appConfigDir()
 	if err != nil {
@@ -202,6 +195,13 @@ func run() error {
 	} else {
 		fmt.Println("Garmin session resumed.")
 	}
+
+	unitID, err := garminClient.UnitIDForDevice(gear.product.Uint16(), gear.name)
+	if err != nil {
+		return fmt.Errorf("find registered %s: %w", gear.name, err)
+	}
+	gear.unitID = unitID
+	fmt.Printf("Using registered Garmin gear: %s (FIT product %d, unit ID %d).\n", gear.name, gear.product, gear.unitID)
 
 	tempDir, err := os.MkdirTemp("", "mywhoosh2garmin-*")
 	if err != nil {
