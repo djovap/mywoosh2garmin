@@ -133,6 +133,10 @@ func credentialsFromEnv() (credentials, error) {
 
 func main() {
 	if err := run(); err != nil {
+		message := fmt.Sprintf("Garmin sync failed: %s", err)
+		if notifyErr := sendMacNotification(message); notifyErr != nil {
+			fmt.Fprintln(os.Stderr, "notification failed:", notifyErr)
+		}
 		fmt.Fprintln(os.Stderr, "sync failed:", err)
 		os.Exit(1)
 	}
@@ -182,6 +186,9 @@ func run() error {
 
 	if len(activities) == 0 {
 		fmt.Println("No MyWhoosh activities found for today.")
+		if err := sendMacNotification("Garmin sync skipped: no MyWhoosh activities found today."); err != nil {
+			fmt.Fprintln(os.Stderr, "notification failed:", err)
+		}
 		return nil
 	}
 	fmt.Printf("Found %d MyWhoosh activit%s for today.\n", len(activities), plural(len(activities), "y", "ies"))
@@ -241,6 +248,9 @@ func run() error {
 	fmt.Printf("Done: %d uploaded, %d skipped.\n", uploaded, skipped)
 	if len(failures) > 0 {
 		return fmt.Errorf("%d activit%s failed: %s", len(failures), plural(len(failures), "y", "ies"), strings.Join(failures, "; "))
+	}
+	if err := sendMacNotification(garminSyncSummary(uploaded, skipped)); err != nil {
+		fmt.Fprintln(os.Stderr, "notification failed:", err)
 	}
 	return nil
 }

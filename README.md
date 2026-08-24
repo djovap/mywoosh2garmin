@@ -50,7 +50,7 @@ This app is configured for a **Forerunner 265** (FIT product ID `4257`). After s
 
 The tool finds activities whose start time falls on the current local calendar day, then downloads, fixes, and uploads each unsynced activity. It exits successfully when there are no activities to sync.
 
-Sessions and the synced-activity tracker are stored locally in `~/.mywhoosh2garmin/`. Credentials are never written there. A Garmin duplicate is treated as already synced.
+Sessions and the synced-activity tracker are stored locally in `~/.mywhoosh2garmin/`. Credentials are never written there. A Garmin duplicate is treated as already synced. The tracker is `~/.mywhoosh2garmin/synced.json`; Garmin session tokens are `oauth1_token.json` and `oauth2_token.json` in that same directory. The formatted FIT file is written only to a temporary `mywhoosh2garmin-*` directory under the system temp directory during upload, then deleted.
 
 ## Automatically sync after MyWhoosh closes (macOS)
 
@@ -63,9 +63,9 @@ Install the event-driven watcher once:
 It builds the Go sync binary and a small macOS `NSWorkspace` watcher, then installs the watcher as a per-user LaunchAgent. It starts at login and receives app launch/termination events—there is no polling.
 
 - When MyWhoosh (`com.whoosh.whooshgame`) opens, it launches `BikeControl`.
-- When the final MyWhoosh process exits, it immediately runs `sync-when-mywhoosh-closes.zsh`, which executes `./mywhoosh2garmin`.
+- When the final MyWhoosh process exits, it closes BikeControl, removes both its pinned and recent-app Dock entries, then immediately runs `sync-when-mywhoosh-closes.zsh`, which executes `./mywhoosh2garmin`.
 
-The sync hook sources `~/.zshrc` before running, so credentials exported there are available in the LaunchAgent environment. Logs are written to `~/.mywhoosh2garmin/watcher.log` and `~/.mywhoosh2garmin/watcher-error.log`.
+The sync hook sources `~/.zshrc` before running, so credentials exported there are available in the LaunchAgent environment. Each sync posts a macOS notification with its Garmin outcome (successful, skipped, or failed). Logs are written to `~/.mywhoosh2garmin/watcher.log` and `~/.mywhoosh2garmin/watcher-error.log`.
 
 ## Building from Source
 

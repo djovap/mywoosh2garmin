@@ -3,6 +3,12 @@ import Foundation
 
 private let myWhooshBundleID = "com.whoosh.whooshgame"
 private let bikeControlApp = "BikeControl"
+private let bikeControlBundleID = "de.jonasbark.swiftcontrol.darwin"
+private let dockPreferencesDomain = "com.apple.dock"
+
+private func log(_ message: String, to handle: FileHandle = .standardOutput) {
+    handle.write(Data("\(message)\n".utf8))
+}
 
 final class MyWhooshLifecycleObserver {
     private let workspace = NSWorkspace.shared
@@ -17,7 +23,7 @@ final class MyWhooshLifecycleObserver {
         }
 
         if !myWhooshPIDs.isEmpty {
-            print("MyWhoosh is already running; opening \(bikeControlApp).")
+            log("MyWhoosh is already running; opening \(bikeControlApp).")
             openBikeControl()
         }
 
@@ -45,7 +51,7 @@ final class MyWhooshLifecycleObserver {
             return
         }
 
-        print("MyWhoosh opened (PID \(app.processIdentifier)); opening \(bikeControlApp).")
+        log("MyWhoosh opened (PID \(app.processIdentifier)); opening \(bikeControlApp).")
         openBikeControl()
     }
 
@@ -60,8 +66,15 @@ final class MyWhooshLifecycleObserver {
             return
         }
 
-        print("MyWhoosh closed; starting the sync hook.")
-        runExitHook()
+        log("MyWhoosh closed; closing \(bikeControlApp), removing it from the Dock, and starting the sync hook.")
+        closeBikeControl()
+        // Wait for macOS to record BikeControl as a recent app after it exits,
+        // then remove that entry before the Dock reloads.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            self.removeBikeControlFromDock()
+            self.runExitHook()
+        }
     }
 
     private func openBikeControl() {
@@ -72,13 +85,67 @@ final class MyWhooshLifecycleObserver {
         do {
             try process.run()
         } catch {
-            fputs("Could not open \(bikeControlApp): \(error)\n", stderr)
+            log("Could not open \(bikeControlApp): \(error)", to: .standardError)
+        }
+    }
+
+    private func closeBikeControl() {
+        for app in workspace.runningApplications where app.bundleIdentifier == bikeControlBundleID {
+            _ = app.terminate()
+        }
+    }
+
+    private func removeBikeControlFromDock() {
+        let defaults = UserDefaults.standard
+        guard var dockPreferences = defaults.persistentDomain(forName: dockPreferencesDomain) else {
+            log("Could not read Dock preferences; BikeControl remains in the Dock.", to: .standardError)
+            return
+        }
+
+        var changed = false
+        for section in ["persistent-apps", "recent-apps"] {
+            guard var apps = dockPreferences[section] as? [[String: Any]] else {
+                continue
+            }
+
+            let originalCount = apps.count
+            apps.removeAll { item in
+                guard let tileData = item["tile-data"] as? [String: Any] else {
+                    return false
+                }
+                if tileData["bundle-identifier"] as? String == bikeControlBundleID {
+                    return true
+                }
+                let fileData = tileData["file-data"] as? [String: Any]
+                let url = fileData?["_CFURLString"] as? String
+                return url == "file:///Applications/BikeControl.app/"
+            }
+            if apps.count != originalCount {
+                dockPreferences[section] = apps
+                changed = true
+            }
+        }
+
+        guard changed else {
+            return
+        }
+
+        defaults.setPersistentDomain(dockPreferences, forName: dockPreferencesDomain)
+        defaults.synchronize()
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = ["Dock"]
+        do {
+            try process.run()
+        } catch {
+            log("BikeControl was removed from Dock preferences, but the Dock could not reload: \(error)", to: .standardError)
         }
     }
 
     private func runExitHook() {
         guard FileManager.default.isExecutableFile(atPath: exitHook.path) else {
-            fputs("Sync hook is missing or not executable: \(exitHook.path)\n", stderr)
+            log("Sync hook is missing or not executable: \(exitHook.path)", to: .standardError)
             return
         }
 
@@ -90,7 +157,7 @@ final class MyWhooshLifecycleObserver {
         do {
             try process.run()
         } catch {
-            fputs("Could not start sync hook: \(error)\n", stderr)
+            log("Could not start sync hook: \(error)", to: .standardError)
         }
     }
 }
@@ -99,6 +166,8 @@ let executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSyml
 let projectDir = executableURL.deletingLastPathComponent()
 let exitHook = projectDir.appendingPathComponent("sync-when-mywhoosh-closes.zsh")
 
-_ = MyWhooshLifecycleObserver(exitHook: exitHook)
-print("Watching MyWhoosh lifecycle events.")
-RunLoop.main.run()
+let observer = MyWhooshLifecycleObserver(exitHook: exitHook)
+log("Watching MyWhoosh lifecycle events.")
+withExtendedLifetime(observer) {
+    RunLoop.main.run()
+}

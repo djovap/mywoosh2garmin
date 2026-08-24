@@ -7,9 +7,14 @@ SYNC_BINARY="$SCRIPT_DIR/mywhoosh2garmin"
 
 # launchd starts non-interactive shells, which do not read ~/.zshrc by default.
 # Load the user's exported credentials before executing the sync binary.
-if [[ -r "$HOME/.zshrc" ]]; then
-  source "$HOME/.zshrc"
+if [[ -r "$HOME/.zshrc" ]] && ! source "$HOME/.zshrc"; then
+  print -u2 "Could not load $HOME/.zshrc; fix its syntax before running the sync."
+  exit 1
 fi
+
+# Variables assigned in .zshrc without `export` are shell-local. Export the
+# credentials required by the Go binary after loading the file.
+export MYWHOOSH_EMAIL MYWHOOSH_PASSWORD GARMIN_EMAIL GARMIN_PASSWORD
 
 set -u
 
